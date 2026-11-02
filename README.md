@@ -15,30 +15,64 @@ loads one validated `Settings` object from the environment and the project
 `.env`, and all later modules must import that object rather than reading
 environment variables directly.
 
+## How it works
+
+The pipeline runs 13 sequential stages. Each stage is idempotent: unchanged inputs
+reuse cached outputs; changed inputs trigger a re-run.
+
+```
+Stage 0  Configuration directories            (create output dirs, validate settings)
+Stage 1  Historical tweet import              (optional CSV/JSON export; skipped if none)
+Stage 2  Apify X ingestion                    (live posts via Apify actor)
+Stage 3  Canonical storage                    (deduplicate tweets into SQLite DB)
+Stage 4  Price ingestion                      (daily OHLCV bars via yfinance)
+Stage 5  News retrieval                       (context only; not a model feature)
+Stage 6  Sentiment scoring                    (FinBERT per-post scores)
+Stage 7  Daily sentiment aggregation          (per-day buckets with lags)
+Stage 8  Feature engineering / dataset        (price features + sentiment lags + targets)
+Stage 9  Model training                       (XGBoost per horizon; GridSearchCV tuned)
+Stage 10 Walk-forward validation              (expanding window; Sharpe/Sortino/Max DD)
+Stage 11 Latest prediction                    (next 1–5 day close forecasts)
+Stage 12 Visualizations                       (price forecast chart)
+Stage 13 Reports                              (evaluation.md + outlook.md)
+```
+
 ## Project layout
 
-```text
+```
 .
 ├── src/
 │   ├── config.py            # typed settings, validation, safe summaries
 │   ├── logging_config.py    # structured logs, run IDs, secret redaction
 │   ├── main.py              # single CLI entry point
+│   ├── pipeline.py          # Pipeline orchestration (stages 0–13)
 │   ├── ingestion/
 │   │   ├── apify_x.py            # live Apify collection, query, normalisation
 │   │   ├── field_parsing.py      # shared timestamp/ID/count/author helpers
 │   │   ├── historical_tweets.py  # CSV/XLSX/JSON import, mapping, quarantine
 │   │   └── records.py            # shared raw-record and sink contracts
-│   └── __main__.py          # python -m src
+│   ├── features/            # Price features + dataset builder
+│   ├── models/              # XGBoost training, artifacts, preprocessing
+│   ├── normalization/       # Tweet + price bar normalization
+│   ├── prediction/          # Latest prediction generation
+│   ├── reporting/           # evaluation.md + outlook.md reports
+│   ├── schemas/             # Pydantic schemas (tweets, prices, quarantine)
+│   ├── sentiment/           # FinBERT scorer
+│   ├── storage/             # SQLite engine, repository, store
+│   └── validation/          # Leakage checks, walk-forward folds
 ├── tests/                   # unit and contract tests
 ├── data/raw/                # immutable source payloads (git-ignored)
 ├── data/processed/          # canonical data and local database (git-ignored)
 ├── models/                  # trained artifacts (git-ignored)
 ├── reports/                 # charts and reports (git-ignored)
 ├── artifacts/               # prediction snapshots and manifests (git-ignored)
+├── logs/                    # app log file (git-ignored)
 ├── .env.example             # documented environment template (no secrets)
 ├── .gitignore
 ├── pyproject.toml
-└── requirements.txt
+├── requirements.txt
+├── explanation.md           # Design decisions, limits, deliverables
+└── README.md                # This file
 ```
 
 ## Quick start (Windows PowerShell)
@@ -61,6 +95,7 @@ The `crowdxbot` console command is available after the editable install:
 crowdxbot check-config
 crowdxbot check-config --json
 crowdxbot --help
+crowdxbot run-all --historical-file path/to/export.csv --reimport --force
 ```
 
 On macOS/Linux the equivalent setup is:
@@ -163,9 +198,30 @@ with run_context() as run_id:
 | `python -m src.main ingest-x --dry-run` | Build and validate the query/actor input without starting a run. |
 | `python -m src.main inspect-apify-actor` | Show Apify actor metadata without starting a run. |
 | `python -m src.main version` | Print the application version. |
+| `crowdxbot run-all` | Run the full pipeline end-to-end. |
+| `crowdxbot run-all --historical-file <path>` | Run with a historical tweet export. |
+| `crowdxbot run-all --reimport` | Re-run ingestion stages even if cached. |
+| `crowdxbot run-all --retrain` | Retrain model even if cached. |
+| `crowdxbot run-all --force` | Continue after failed stages (price-only run if no tweets). |
 
 Pipeline commands (`ingest-prices`, `score`, `train`, `predict`, `report`,
 `run-all`) are added by later modules.
+
+### Flags for `run-all`
+
+| Flag | Purpose |
+| --- | --- |
+| `--reimport` | Re-run ingestion stages even if cached. |
+| `--retrain` | Retrain model even if cached. |
+| `--force` | Continue after failed stages (price-only run if no tweets). |
+| `--historical-file <path>` | Import a historical tweet export. |
+
+### Inspect the Apify actor
+
+```powershell
+crowdxbot inspect-apify-actor
+crowdxbot ingest-x --dry-run
+```
 
 ## Historical tweet import
 
@@ -333,6 +389,62 @@ Secrets are never written to `actor_run.json` or `manifest.json`; the logging
 redaction filter also covers Apify API errors. The untouched dataset payload is
 preserved in `dataset_items.json` for audit and replay.
 
+## Output
+
+All outputs are written under the project root and are gitignored (regenerated on
+each run):
+
+| Path | Contents |
+| --- | --- |
+| `data/processed/crowdxbot.db` | SQLite DB: canonical tweets, price bars, quarantine rows |
+| `data/processed/sentiment/` | Daily sentiment buckets + scores parquet |
+| `data/processed/datasets/` | Versioned modelling dataset parquet + audit |
+| `models/<run_id>.pkl` | Pickled ModelBundle (XGBoost models + preprocessor + manifest) |
+| `reports/evaluation.md` | Walk-forward errors, baseline comparison, strategy risk metrics (Sharpe/Sortino/Max DD) |
+| `reports/outlook.md` | Next 1–5 day forecasts + sentiment context + recent news |
+| `reports/charts/AAPL_forecast.png` | Price forecast chart |
+| `artifacts/pipeline/AAPL/state.json` | Per-stage fingerprints for cache/reuse |
+| `logs/app.log` | Structured JSON log |
+
+### Example output (reports/evaluation.md)
+
+```
+## Comparison With the Persistence Baseline
+| Model   | Horizon | MAE improvement | RMSE improvement | Verdict         |
+|---------|---------|-----------------|------------------|-----------------|
+| drift   | n+1     | +0.1%           | +0.1%            | better          |
+| xgboost | n+1     | -1.8%           | -3.3%            | worse           |
+
+## Strategy Risk Metrics (out-of-sample)
+| Model   | Horizon | Sharpe | Sortino | Max Drawdown | Ann. Return | Ann. Volatility | Total Trades |
+|---------|---------|--------|---------|--------------|-------------|-----------------|--------------|
+| xgboost | n+1     | 0.496  | 0.387   | 0.00%        | +7.64%      | 15.40%          | 56           |
+```
+
+### Example output (reports/outlook.md)
+
+```
+## Forecasts n+1 … n+5
+| Horizon | Predicted return | Predicted close |
+|---------|------------------|-----------------|
+| n+1     | +0.2270%         | 342.02          |
+| n+5     | +1.4203%         | 346.10          |
+```
+
+## Configuration notes
+
+- **Date window:** Defaults to the last `HISTORY_DAYS` (180) days. Set
+  `DATA_START_DATE` and/or `DATA_END_DATE` in `.env` to override.
+- **Sentiment lag:** Same-day sentiment is refused by default (lag >= 1) to
+  avoid look-ahead leakage.
+- **Walk-forward:** Expanding training window, 120-day initial train, 5-day
+  test blocks, 5-day embargo (>= largest horizon).
+- **Hyperparameters:** GridSearchCV with TimeSeriesSplit searches
+  `n_estimators`, `max_depth`, `learning_rate`, `subsample`, `colsample_bytree`,
+  `gamma`, `reg_alpha`, `reg_lambda`, `min_child_weight` per horizon.
+- **Model cache:** Trained models are saved as `<run_id>.pkl` in `models/`.
+  Subsequent runs reuse the cached bundle unless `--retrain` is passed.
+
 ## Tests and quality checks
 
 ```powershell
@@ -359,24 +471,13 @@ developer's real `.env` cannot affect results. Live API tests should be marked
   any log/report artifact. Redaction is a safety net, not a substitute for
   careful handling.
 
-## Roadmap
+## Limitations
 
-Modules 0, 1, and 2 are the foundation for the 15-module pack:
-
-1. ✅ Historical tweet import — explicit CSV/XLSX/JSON export with quarantine
-2. ✅ Live X ingestion through Apify — schema-driven query, polling, provenance
-3. Canonical schemas, deduplication, and storage
-4. Historical price ingestion
-5. News retrieval (Tavily, optional Exa)
-6. Per-post sentiment scoring
-7. Daily sentiment aggregation
-8. Feature engineering and modelling dataset
-9. Baselines and model training
-10. Walk-forward validation and trading metrics
-11. Latest prediction generation
-12. Visualizations
-13. Outlook and evaluation report
-14. Orchestration, CLI, and end-to-end tests
-
-News is report context only and must never enter the model feature matrix
-unless the project owner explicitly changes that restriction.
+- Daily stock returns have near-zero autocorrelation; persistence ("price stays
+  same") is the near-optimal guess. XGBoost cannot consistently beat it.
+- The free Apify plan caps results at ~10 tweets/day — insufficient for real
+  sentiment coverage without a historical import.
+- Strategy risk metrics (Sharpe/Sortino/Max Drawdown) can be near-zero or
+  misleading when threshold-based signals are sparse (many zero-signal rows →
+  flat equity curve).
+- Forecasts are model estimates, not guaranteed outcomes. Not financial advice.
