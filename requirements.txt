@@ -1,0 +1,46 @@
+# Core data processing
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+pyarrow>=17,<25
+openpyxl>=3.1,<4.0
+python-dateutil>=2.9,<5.0
+
+# Configuration, validation, and CLI
+pydantic>=2.8,<3.0
+pydantic-settings>=2.4,<3.0
+python-dotenv>=1.0,<2.0
+typer>=0.12,<1.0
+rich>=13.8,<15.0
+tenacity>=9.0,<10.0
+
+# Timezone database (required by zoneinfo on Windows)
+tzdata>=2024.1
+
+# Storage
+SQLAlchemy>=2.0,<3.0
+
+# External data providers
+apify-client>=1.8,<3.0
+tavily-python>=0.5,<1.0
+yfinance>=0.2.40,<2.0
+
+# NLP sentiment scoring
+transformers>=4.44,<5.0
+torch>=2.4
+sentencepiece>=0.2,<1.0
+
+# Machine learning and evaluation
+scikit-learn>=1.5,<2.0
+xgboost>=2.1,<4.0
+scipy>=1.13,<2.0
+
+# Charts and reports
+matplotlib>=3.9,<4.0
+plotly>=5.24,<7.0
+jinja2>=3.1,<4.0
+markdown>=3.7,<4.0
+
+# Testing and code quality
+pytest>=8.3,<9.0
+pytest-cov>=5.0,<8.0
+ruff>=0.6,<1.0

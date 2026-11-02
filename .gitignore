@@ -1,0 +1,88 @@
+# ---------------------------------------------------------------------------
+# Secrets and local configuration
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.secrets/
+
+# ---------------------------------------------------------------------------
+# Python / environments
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---------------------------------------------------------------------------
+# Generated data, models, reports, and logs
+# ---------------------------------------------------------------------------
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+models/*
+!models/.gitkeep
+reports/*
+!reports/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Common data/artifact formats (belt and braces)
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.feather
+*.joblib
+*.pkl
+*.h5
+*.onnx
+
+# ---------------------------------------------------------------------------
+# Tooling and test output
+# ---------------------------------------------------------------------------
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.log
+
+# Tests — not pushed to GitHub
+tests/
+final_check.py
+verify_pipeline.py
+test_news.py
+test_news2.py
+test_structure.py
+
+# ---------------------------------------------------------------------------
+# Editors and operating systems
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
